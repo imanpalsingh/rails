@@ -129,6 +129,7 @@ module ActiveStorage
       #
       def has_many_attached(name, dependent: :purge_later, service: nil, strict_loading: false, path_on_service: nil)
         validate_service_configuration(name, service)
+        validate_path_on_service(path_on_service)
 
         generated_association_methods.class_eval <<-CODE, __FILE__, __LINE__ + 1
           # frozen_string_literal: true
