@@ -141,7 +141,7 @@ class ActiveStorage::Blob < ActiveStorage::Record
       content_type ||= blobs.pluck(:content_type).compact.first
 
       new(filename: filename, content_type: content_type, metadata: metadata, byte_size: blobs.sum(&:byte_size)).tap do |combined_blob|
-        combined_blob.compose(blobs.file_path_on_service)
+        combined_blob.compose(blobs.map(&:file_path_on_service))
         combined_blob.save!
       end
     end
