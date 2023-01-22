@@ -44,11 +44,12 @@ module ActiveStorage
       # pass the +:strict_loading+ option. You can do:
       #
       #   class User < ApplicationRecord
-      #     has_one_attached :avatar, strict_loading: true
+      #     has_one_attached :avatar, strict_loading: true, path_on_service: ":path/:filename"
       #   end
       #
-      def has_one_attached(name, dependent: :purge_later, service: nil, strict_loading: false)
+        def has_one_attached(name, dependent: :purge_later, service: nil, strict_loading: false, path_on_service: nil)
         validate_service_configuration(name, service)
+        validate_path_on_service(path_on_service)
 
         generated_association_methods.class_eval <<-CODE, __FILE__, __LINE__ + 1
           # frozen_string_literal: true
@@ -80,7 +81,7 @@ module ActiveStorage
           :has_one_attached,
           name,
           nil,
-          { dependent: dependent, service_name: service },
+          { dependent: dependent, service_name: service, path_on_service: path_on_service },
           self
         )
         yield reflection if block_given?
@@ -126,7 +127,7 @@ module ActiveStorage
       #     has_many_attached :photos, strict_loading: true
       #   end
       #
-      def has_many_attached(name, dependent: :purge_later, service: nil, strict_loading: false)
+      def has_many_attached(name, dependent: :purge_later, service: nil, strict_loading: false, path_on_service: nil)
         validate_service_configuration(name, service)
 
         generated_association_methods.class_eval <<-CODE, __FILE__, __LINE__ + 1
@@ -203,7 +204,7 @@ module ActiveStorage
           :has_many_attached,
           name,
           nil,
-          { dependent: dependent, service_name: service },
+          { dependent: dependent, service_name: service, path_on_service: path_on_service },
           self
         )
         yield reflection if block_given?
@@ -211,6 +212,13 @@ module ActiveStorage
       end
 
       private
+
+        def validate_path_on_service(path_on_service)
+          if !ActiveStorage.track_variants && path_on_service
+            raise RuntimeError, "ActiveStorage.track_variants is required to be 'true' to use 'path_on_service'"
+          end
+        end
+
         def validate_service_configuration(association_name, service)
           if service.present?
             ActiveStorage::Blob.services.fetch(service) do
