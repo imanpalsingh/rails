@@ -74,8 +74,8 @@ class ActiveStorage::Blob < ActiveStorage::Record
       super(id, purpose: purpose)
     end
 
-    def build_after_unfurling(key: nil, io:, filename:, content_type: nil, metadata: nil, service_name: nil, identify: true, record: nil) # :nodoc:
-      new(key: key, filename: filename, content_type: content_type, metadata: metadata, service_name: service_name).tap do |blob|
+    def build_after_unfurling(key: nil, io:, filename:, content_type: nil, metadata: nil, service_name: nil, identify: true, record: nil, path_on_service: nil) # :nodoc:
+      new(key: key, filename: filename, content_type: content_type, metadata: metadata, service_name: service_name, path_on_service: path_on_service).tap do |blob|
         blob.unfurl(io, identify: identify)
       end
     end
@@ -101,7 +101,7 @@ class ActiveStorage::Blob < ActiveStorage::Record
     # Once the form using the direct upload is submitted, the blob can be associated with the right record using
     # the signed ID.
     def create_before_direct_upload!(key: nil, filename:, byte_size:, checksum:, content_type: nil, metadata: nil, service_name: nil, record: nil)
-      create! key: key, filename: filename, byte_size: byte_size, checksum: checksum, content_type: content_type, metadata: metadata, service_name: service_name
+      create! key: file_path_on_service, filename: filename, byte_size: byte_size, checksum: checksum, content_type: content_type, metadata: metadata, service_name: service_name
     end
 
     # To prevent problems with case-insensitive filesystems, especially in combination
@@ -141,7 +141,7 @@ class ActiveStorage::Blob < ActiveStorage::Record
       content_type ||= blobs.pluck(:content_type).compact.first
 
       new(filename: filename, content_type: content_type, metadata: metadata, byte_size: blobs.sum(&:byte_size)).tap do |combined_blob|
-        combined_blob.compose(blobs.pluck(:key))
+        combined_blob.compose(blobs.file_path_on_service)
         combined_blob.save!
       end
     end
@@ -201,19 +201,19 @@ class ActiveStorage::Blob < ActiveStorage::Record
   # the URL should only be exposed as a redirect from a stable, possibly authenticated URL. Hiding the
   # URL behind a redirect also allows you to change services without updating all URLs.
   def url(expires_in: ActiveStorage.service_urls_expire_in, disposition: :inline, filename: nil, **options)
-    service.url key, expires_in: expires_in, filename: ActiveStorage::Filename.wrap(filename || self.filename),
+    service.url file_path_on_service, expires_in: expires_in, filename: ActiveStorage::Filename.wrap(filename || self.filename),
       content_type: content_type_for_serving, disposition: forced_disposition_for_serving || disposition, **options
   end
 
   # Returns a URL that can be used to directly upload a file for this blob on the service. This URL is intended to be
   # short-lived for security and only generated on-demand by the client-side JavaScript responsible for doing the uploading.
   def service_url_for_direct_upload(expires_in: ActiveStorage.service_urls_expire_in)
-    service.url_for_direct_upload key, expires_in: expires_in, content_type: content_type, content_length: byte_size, checksum: checksum, custom_metadata: custom_metadata
+    service.url_for_direct_upload file_path_on_service, expires_in: expires_in, content_type: content_type, content_length: byte_size, checksum: checksum, custom_metadata: custom_metadata
   end
 
   # Returns a Hash of headers for +service_url_for_direct_upload+ requests.
   def service_headers_for_direct_upload
-    service.headers_for_direct_upload key, filename: filename, content_type: content_type, content_length: byte_size, checksum: checksum, custom_metadata: custom_metadata
+    service.headers_for_direct_upload file_path_on_service, filename: filename, content_type: content_type, content_length: byte_size, checksum: checksum, custom_metadata: custom_metadata
   end
 
   def content_type_for_serving # :nodoc:
@@ -252,23 +252,23 @@ class ActiveStorage::Blob < ActiveStorage::Record
   end
 
   def upload_without_unfurling(io) # :nodoc:
-    service.upload key, io, checksum: checksum, **service_metadata
+    service.upload file_path_on_service, io, checksum: checksum, **service_metadata
   end
 
   def compose(keys) # :nodoc:
     self.composed = true
-    service.compose(keys, key, **service_metadata)
+    service.compose(keys, file_path_on_service, **service_metadata)
   end
 
   # Downloads the file associated with this blob. If no block is given, the entire file is read into memory and returned.
   # That'll use a lot of RAM for very large files. If a block is given, then the download is streamed and yielded in chunks.
   def download(&block)
-    service.download key, &block
+    service.download file_path_on_service, &block
   end
 
   # Downloads a part of the file associated with this blob.
   def download_chunk(range)
-    service.download_chunk key, range
+    service.download_chunk file_path_on_service, range
   end
 
   # Downloads the blob to a tempfile on disk. Yields the tempfile.
@@ -286,7 +286,7 @@ class ActiveStorage::Blob < ActiveStorage::Record
   # Raises ActiveStorage::IntegrityError if the downloaded data does not match the blob's checksum.
   def open(tmpdir: nil, &block)
     service.open(
-      key,
+      file_path_on_service,
       checksum: checksum,
       verify: !composed,
       name: [ "ActiveStorage-#{id}-", filename.extension_with_delimiter ],
@@ -296,15 +296,18 @@ class ActiveStorage::Blob < ActiveStorage::Record
   end
 
   def mirror_later # :nodoc:
-    ActiveStorage::MirrorJob.perform_later(key, checksum: checksum) if service.respond_to?(:mirror)
+    ActiveStorage::MirrorJob.perform_later(file_path_on_service, checksum: checksum) if service.respond_to?(:mirror)
   end
 
   # Deletes the files on the service associated with the blob. This should only be done if the blob is going to be
   # deleted as well or you will essentially have a dead reference. It's recommended to use #purge and #purge_later
   # methods in most circumstances.
   def delete
-    service.delete(key)
-    service.delete_prefixed("variants/#{key}/") if image?
+    if file_path_on_service
+      queue_variants_for_delete if image?
+    else
+      service.delete_prefixed("variants/#{key}/") if image?
+    end
   end
 
   # Destroys the blob record and then deletes the file on the service. This is the recommended way to dispose of unwanted
@@ -353,6 +356,18 @@ class ActiveStorage::Blob < ActiveStorage::Record
   INVALID_VARIABLE_CONTENT_TYPES_TO_SERVE_AS_BINARY_DEPRECATED_IN_RAILS_7 = ["text/javascript"]
 
   private
+
+    def queue_variants_for_delete
+      #: Todo move to a background job
+      variant_records.each do |variant|
+        service.delete(variant.file_path_on_service)
+      end
+    end
+
+    def file_path_on_service
+      path_on_service ? Interpolations.interpolate(path_on_service, self, :original): key
+    end
+
     def compute_checksum_in_chunks(io)
       raise ArgumentError, "io must be rewindable" unless io.respond_to?(:rewind)
 
@@ -398,7 +413,7 @@ class ActiveStorage::Blob < ActiveStorage::Record
     end
 
     def update_service_metadata
-      service.update_metadata key, **service_metadata if service_metadata.any?
+      service.update_metadata file_path_on_service, **service_metadata if service_metadata.any?
     end
 end
 
