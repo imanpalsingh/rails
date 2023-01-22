@@ -76,13 +76,13 @@ class ActiveStorage::Variant
   # for a variant that points to the ActiveStorage::RepresentationsController, which in turn will use this +service_call+ method
   # for its redirection.
   def url(expires_in: ActiveStorage.service_urls_expire_in, disposition: :inline)
-    service.url key, expires_in: expires_in, disposition: disposition, filename: filename, content_type: content_type
+    service.url file_path_on_service, expires_in: expires_in, disposition: disposition, filename: filename, content_type: content_type
   end
 
   # Downloads the file associated with this variant. If no block is given, the entire file is read into memory and returned.
   # That'll use a lot of RAM for very large files. If a block is given, then the download is streamed and yielded in chunks.
   def download(&block)
-    service.download key, &block
+    service.download file_path_on_service, &block
   end
 
   def filename
@@ -101,14 +101,19 @@ class ActiveStorage::Variant
   end
 
   private
+
+    def file_path_on_service
+      blob.path_on_service ? Interpolations.interpolate(blob.path_on_service, self, variation.key) : key
+    end
+
     def processed?
-      service.exist?(key)
+      service.exist?(file_path_on_service)
     end
 
     def process
       blob.open do |input|
         variation.transform(input) do |output|
-          service.upload(key, output, content_type: content_type)
+          service.upload(file_path_on_service, output, content_type: content_type)
         end
       end
     end
