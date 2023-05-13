@@ -31,11 +31,13 @@ require "active_support/core_ext/numeric/time"
 require "active_storage/version"
 require "active_storage/deprecator"
 require "active_storage/errors"
+require "active_storage/helpers"
 
 require "marcel"
 
 module ActiveStorage
   extend ActiveSupport::Autoload
+  extend Helpers
 
   autoload :Attached
   autoload :FixtureSet

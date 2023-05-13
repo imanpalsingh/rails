@@ -34,7 +34,7 @@ class ActiveStorage::VariantWithRecord
       blob.open do |input|
         variation.transform(input) do |output|
           yield io: output, filename: "#{blob.filename.base}.#{variation.format.downcase}",
-            content_type: variation.content_type, service_name: blob.service.name
+            content_type: variation.content_type, service_name: blob.service.name, path: blob.path
         end
       end
     end

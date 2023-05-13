@@ -355,7 +355,17 @@ class ActiveStorage::Blob < ActiveStorage::Record
   end
 
   def path_on_service
-    path ? ActiveStorage::Interpolations.interpolate(path, self, :original): key
+    type = :original
+    type = record_variant_digest if is_a_variant?
+    path ? ActiveStorage::Interpolations.interpolate(path, self, type): key
+  end
+
+  def is_a_variant?
+    attachments&.first&.record_type == 'ActiveStorage::VariantRecord'
+  end
+
+  def record_variant_digest
+    attachments&.first&.record.variation_digest
   end
 
 
